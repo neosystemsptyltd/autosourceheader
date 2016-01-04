@@ -211,18 +211,43 @@ namespace autosourceheader
 
                 // now check for end of file marker
                 int lastline = lines.Count();
-                if (lines[lastline-1] != Settings.LastLine)
+                int j = lastline - 1;
+                bool LastLineCommentFound = false;
+                bool LastLineCommentFatalErr = false;
+
+                while((j >= 0) && !LastLineCommentFound && !LastLineCommentFatalErr)
                 {
-                    string err = "Last line not found at 2nd last line in file " + s + " (Last line must be CR-LF)";
-                    if (OptVerbose)
+                    if (lines[j] == "")
                     {
-                        Console.WriteLine("L" + (lastline-2).ToString() + " " + lines[lastline-2]);
-                        Console.WriteLine("L" + (lastline-1).ToString() + " " + lines[lastline-1]);
-                        Console.WriteLine("L" + lastline.ToString() + " " + lines[lastline]);
-                        Console.WriteLine("Error: "+err);
+                        // quitely absorb
                     }
-                    Errors.Add(err);
+                    else if (lines[j].Contains(Settings.LastLine))
+                    {
+                        // "last line" comment found - now we can carry on
+                        LastLineCommentFound = true;
+                    }
+                    else
+                    {
+                        string llerr = "Last line(s) do not contain CR-LF";
+                        if (OptVerbose)
+                        {
+                            Console.WriteLine("L" + (j - 2).ToString() + " " + lines[j - 2]);
+                            Console.WriteLine("L" + (j - 1).ToString() + " " + lines[j - 1]);
+                            Console.WriteLine("L" + j.ToString() + " " + lines[j]);
+                            Console.WriteLine("Error: " + llerr);
+                        }
+                        Errors.Add(llerr);
+                        LastLineCommentFatalErr = true;
+                    }
+                    j--;
                 }
+
+                if ( j < 0 )
+                {
+                    string llnotfounderr = "Last line comment not found";
+                    Errors.Add(llnotfounderr);
+                }
+
                 if (Errors.Count() > 0)
                 {
                     StringBuilder errstr = new StringBuilder(Errors.Count() * 160);
