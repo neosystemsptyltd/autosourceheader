@@ -8,6 +8,7 @@ using neolibs.FileUtils;
 using System.IO;
 using neolibs;
 using neolibs.Extensions;
+using Newtonsoft.Json;
 
 namespace autosourceheader
 {
@@ -50,27 +51,27 @@ namespace autosourceheader
         /// <summary>
         /// List of files to include in operation
         /// </summary>
-        public List<string> FilesList;
+        public List<string> FilesList { get; set; }
 
         /// <summary>
         /// List of files to exclude
         /// </summary>
-        public List<string> ExcludeList;
+        public List<string> ExcludeList { get; set; }
 
         /// <summary>
         /// List of opensource notices
         /// </summary>
-        public List<OpenSourceNoticeFile> OpenSourceNotices;
+        public List<OpenSourceNoticeFile> OpenSourceNotices { get; set; }
 
         /// <summary>
         /// List of files to exclude
         /// </summary>
-        public string SourceDirectory;
+        public string SourceDirectory { get; set; }
 
         /// <summary>
         /// List of forbidden words in the code
         /// </summary>
-        public List<string> ForbiddenWords;
+        public List<string> ForbiddenWords { get; set; }
 
         /// <summary>
         /// Project name
@@ -113,40 +114,102 @@ namespace autosourceheader
         public bool OptCheckASCII { get; set; } = true;
 
         /// <summary>
-        /// Constructor
+        /// Option to report errors with full exception stack trace
         /// </summary>
-        public AppSettings()
+        public bool OptLongErrors { get; set; } = false;
+
+        /// <summary>
+        /// Option to automatically add the last line comment
+        /// </summary>
+        public bool OptAutoAddLastLineComment { get; set; } = false;
+
+        /// <summary>
+        /// Option to autoamtically add the end of header comment
+        /// </summary>
+        public bool OptAutoAddEndOfHeaderComment { get; set; } = false;
+
+        /// <summary>
+        /// Clear the settings
+        /// </summary>
+        public void Clear()
         {
-            ProjectName = "FSK Board reprogramming project";
-            Compiler = "Atmel Studio 7.0, GCC AVR 4.9.2";
-            Author = "A Jordaan";
-            Description = "Source files for FSK Board reprogramming project";
-            Copyright = "(c) 2015 Radio Data Communications"+Environment.NewLine + "// (Some file in this project are open source)";
+            ProjectName = "";
+            Compiler = "";
+            Author = "";
+            Description = "";
+            Copyright = "";
+
+            HeaderFilename = "";
+            HeaderDelimiter = "";
+            LastLine = "";
+            SourceDirectory = "";
+
+            FilesList.Clear();
+            ExcludeList.Clear();
+            OpenSourceNotices.Clear();
+            ForbiddenWords.Clear();
+        }
+
+        /// <summary>
+        /// set defaults
+        /// </summary>
+        public void Defaults()
+        {
+            ProjectName = "Name of the project";
+            Compiler = "Compiler and version";
+            Author = "Author(s)";
+            Description = "Descrioption of the project";
+            Copyright = "(c) YEAR Copyright notice";
 
             HeaderFilename = "autosourceheader.txt";
             HeaderDelimiter = "/// End of Header";
             LastLine = "/// End of file";
-            SourceDirectory = @"C:\Users\armand\ownCloud\Projects\RDC\FSKProject\Design\Software\Firmware\FSK_GSM_Unit\FSK_GSM_Unit\src";
+            SourceDirectory = @"Directory\where\source\can\be\found";
 
             FilesList = new List<string>();
+            FilesList.Add("*.hpp");
             FilesList.Add("*.cpp");
             FilesList.Add("*.c");
             FilesList.Add("*.h");
 
             ExcludeList = new List<string>();
-            ExcludeList.Add("pthread" + Path.DirectorySeparatorChar);
-            ExcludeList.Add("ext" + Path.DirectorySeparatorChar);
+            ExcludeList.Add("excluded" + Path.DirectorySeparatorChar);
+            ExcludeList.Add("path" + Path.DirectorySeparatorChar);
+            ExcludeList.Add("names" + Path.DirectorySeparatorChar);
 
             OpenSourceNotices = new List<OpenSourceNoticeFile>();
 
             ForbiddenWords = new List<string>();
-            ForbiddenWords.Add("Netstar");
-            ForbiddenWords.Add("Reality");
-            ForbiddenWords.Add("OEM");
-            ForbiddenWords.Add("Duotronic");
-            ForbiddenWords.Add("Sema");
-            ForbiddenWords.Add("Tsalano");
-            ForbiddenWords.Add("???");
+            ForbiddenWords.Add("words");
+            ForbiddenWords.Add("that");
+            ForbiddenWords.Add("should");
+            ForbiddenWords.Add("not");
+            ForbiddenWords.Add("appear");
+            ForbiddenWords.Add("in");
+            ForbiddenWords.Add("the");
+            ForbiddenWords.Add("code");
+        }
+
+        /// <summary>
+        /// constructor
+        /// </summary>
+        public AppSettings()
+        {
+            FilesList = new List<string>();
+            ExcludeList = new List<string>();
+            OpenSourceNotices = new List<OpenSourceNoticeFile>();
+            ForbiddenWords = new List<string>();
+        }
+
+        /// <summary>
+        /// ToString method for AppSettings class
+        /// </summary>
+        /// <returns>string with description of the parameters</returns>
+        public override string ToString()
+        {
+            string s = ReflectionUtils.GetClassPropertiesString(this);
+
+            return s;
         }
     }
 
@@ -173,12 +236,20 @@ namespace autosourceheader
                     headerlines[i] = headerlines[i].Replace("$DATE", dt.ToShortDateString() + ", " + dt.ToShortTimeString());
                     headerlines[i] = headerlines[i].Replace("$DESCRIPTION", Settings.Description);
                     headerlines[i] = headerlines[i].Replace("$COPYRIGHT", Settings.Copyright);
+                    headerlines[i] = headerlines[i].Replace("$YEAR", dt.Year.ToString());
                 }
             }
             catch (Exception exc)
             {
                 throw new Exception("Error in preparing Header file", exc);
             }
+        }
+
+        private enum EndOfFileStates
+        {
+            LookForCRLF,
+            LookForEndofLineComment,
+            Done
         }
 
         static void ProcessFile(string s)
@@ -196,6 +267,10 @@ namespace autosourceheader
                 string[] lines = File.ReadAllLines(s);
                 string[] headerlines = File.ReadAllLines(Settings.HeaderFilename);
 
+                if (Settings.OptVerbose)
+                {
+                    Console.WriteLine("Total Lines loaded: {0}",lines.Count());
+                }
                 // scan through all files and find the end of header text
                 // while doing that also check for illegal words in the comments
                 for (i = 0; i < lines.Count(); i++)
@@ -231,47 +306,87 @@ namespace autosourceheader
                 }
                 if (hdrdelimidx < 0)
                 {
-                    // throw exception and stop because we cannot really continue
-                    throw new Exception("File " + s + " does not have a header delimiter.");
+                    if (Settings.OptAutoAddEndOfHeaderComment)
+                    {
+                        // add the end of header comment in the beginning of the file
+                        lines = lines.InsertAt(Settings.HeaderDelimiter, 0);
+                    }
+                    else
+                    {
+                        // throw exception and stop because we cannot really continue
+                        throw new Exception("File " + s + " does not have a header delimiter.");
+                    }
                 }
 
                 // now check for end of file marker
                 int lastline = lines.Count();
                 int j = lastline - 1;
                 bool LastLineCommentFound = false;
-                bool LastLineCommentFatalErr = false;
+                bool FileEndsInCRLF = false;
+                EndOfFileStates State = EndOfFileStates.LookForCRLF;
 
-                while((j >= 0) && !LastLineCommentFound && !LastLineCommentFatalErr)
+                while ((j >= 0) && (State != EndOfFileStates.Done))
                 {
-                    if (lines[j] == "")
+                    switch (State)
                     {
-                        // quitely absorb
+                        case EndOfFileStates.LookForCRLF:
+                            if (lines[j] == "")
+                            {
+                                // last line contains only CRLF
+                                FileEndsInCRLF = true;
+                                State = EndOfFileStates.LookForEndofLineComment;
+                                j--;
+                            }
+                            else
+                            {
+                                State = EndOfFileStates.Done;
+                            }
+                            break;
+
+                        case EndOfFileStates.LookForEndofLineComment:
+                            if (lines[j] != "")
+                            {
+                                if (lines[j].Contains(Settings.LastLine))
+                                {
+                                    // "last line" comment found - now we can carry on
+                                    LastLineCommentFound = true;
+                                    State = EndOfFileStates.Done;
+                                }
+                            }
+                            j--;
+                            break;
+
+                        case EndOfFileStates.Done:
+                            break;
                     }
-                    else if (lines[j].Contains(Settings.LastLine))
+                }
+
+                if (!FileEndsInCRLF)
+                {
+                    string llerr = "Last line(s) do not contain CR-LF";
+                    if (Settings.OptVerbose)
                     {
-                        // "last line" comment found - now we can carry on
-                        LastLineCommentFound = true;
+                        Console.WriteLine("L" + (j - 2).ToString() + " " + lines[j - 2]);
+                        Console.WriteLine("L" + (j - 1).ToString() + " " + lines[j - 1]);
+                        Console.WriteLine("L" + j.ToString() + " " + lines[j]);
+                        Console.WriteLine("Error: " + llerr);
+                    }
+                    Errors.Add(llerr);
+                }
+
+                if (!LastLineCommentFound)
+                {
+                    if (Settings.OptAutoAddLastLineComment)
+                    {
+                        lines = lines.Append(Environment.NewLine);
+                        lines = lines.Append(Settings.LastLine + Environment.NewLine);
+                        lines = lines.Append(Environment.NewLine);
                     }
                     else
                     {
-                        string llerr = "Last line(s) do not contain CR-LF";
-                        if (Settings.OptVerbose)
-                        {
-                            Console.WriteLine("L" + (j - 2).ToString() + " " + lines[j - 2]);
-                            Console.WriteLine("L" + (j - 1).ToString() + " " + lines[j - 1]);
-                            Console.WriteLine("L" + j.ToString() + " " + lines[j]);
-                            Console.WriteLine("Error: " + llerr);
-                        }
-                        Errors.Add(llerr);
-                        LastLineCommentFatalErr = true;
+                        string llnotfounderr = "Last line comment not found";
+                        Errors.Add(llnotfounderr);
                     }
-                    j--;
-                }
-
-                if ( j < 0 )
-                {
-                    string llnotfounderr = "Last line comment not found";
-                    Errors.Add(llnotfounderr);
                 }
 
                 if (Errors.Count() > 0)
@@ -376,6 +491,7 @@ namespace autosourceheader
                         else
                         {
                             ProcessFile(file);
+                            Console.ReadLine();
                         }
                     }
                 }
@@ -395,7 +511,29 @@ namespace autosourceheader
         private static void LoadSettings()
         {
             string f = GetSettingsFile();
+            Settings.Clear();
             Xml<AppSettings>.LoadFromXml(ref Settings, f);
+        }
+
+        static string ExceptionString(Exception ex)
+        {
+            if (Settings.OptLongErrors)
+            {
+                return ex.ToString();
+            }
+            else
+            {
+                StringBuilder str = new StringBuilder(2048);
+                Exception inner = ex;
+                while(inner != null)
+                {
+                    str.Append(inner.Message);
+                    inner = inner.InnerException;
+                }
+                string s = str.ToString();
+
+                return s;
+            }
         }
 
         static void Main(string[] args)
@@ -412,7 +550,11 @@ namespace autosourceheader
                 Console.WriteLine("    --verbose        - Show extra detailed information.");
                 Console.WriteLine("    --noverbose      - Do NOT show extra detailed information.");
                 Console.WriteLine("    --checkascii     - Ensure that the file contains ASCII characters only");
-                Console.WriteLine("    --nocheckascii     - Skip ASCII characters checking");
+                Console.WriteLine("    --nocheckascii   - Skip ASCII characters checking");
+                Console.WriteLine("    --longerrors     - Show long erros (full stack trace)");
+                Console.WriteLine("");
+                Console.WriteLine("    --auto-add-last-line-comment       - Automatically add the last line comment.");
+                Console.WriteLine("    --auto-add-end-of-header-comment   - Automatically addd the end of header comment.");
                 return;
             }
             LoadSettings();
@@ -439,6 +581,19 @@ namespace autosourceheader
             {
                 Settings.OptVerbose = true;
             }
+            if (Commandline.FindParam("--longerrors") > 0)
+            {
+                Settings.OptLongErrors = true;
+            }
+            if (Commandline.FindParam("--auto-add-last-line-comment") > 0)
+            {
+                Settings.OptAutoAddLastLineComment = true;
+            }
+            if (Commandline.FindParam("--auto-add-end-of-header-comment") > 0)
+            {
+                Settings.OptAutoAddEndOfHeaderComment = true;
+            }
+
             if (Commandline.FindParam("--savecfg") > 0)
             {
                 try
@@ -450,17 +605,30 @@ namespace autosourceheader
                 }
                 catch(Exception exc)
                 {
-                    NeoConsole.WriteLineError("Error occured: " + exc.ToString());
+                    NeoConsole.WriteLineError("Error occured: " + ExceptionString(exc));
                 }
             }
 
+            if (Settings.OptVerbose)
+            {
+                Console.WriteLine("Settings file name used: "+GetSettingsFile());
+
+                Console.WriteLine("Settings:");
+                Console.WriteLine(Settings.ToString());
+
+                string jsonText = JsonConvert.SerializeObject(Settings, Formatting.Indented);
+
+                Console.WriteLine("JSON: "+jsonText);
+
+                // ReflectionUtils.GetClassProperties(Settings);
+            }
             try
             {
                 DoAllFiles();
             }
             catch(Exception exc)
             {
-                NeoConsole.WriteLineError("Error occured: " + exc.ToString());
+                NeoConsole.WriteLineError("Error occured: " +ExceptionString(exc));
             }
         }
     }
